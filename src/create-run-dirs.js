@@ -1,4 +1,6 @@
 var fs = require('fs');
+var sys = require('sys')
+var exec = require('child_process').exec;
 
 /* options is
   {
@@ -105,7 +107,8 @@ function createRunDirs(options) {
   function copyFiles(source, target) {
     fs.readdirSync(source).forEach(function(file) {
       var sourceFile = source + "/" + file;
-      fs.createReadStream(sourceFile).pipe(fs.createWriteStream(target + "/" + file));
+      fs.writeFileSync(target + "/" + file, String(fs.readFileSync(sourceFile)));
+      fs.fsyncSync(fs.openSync(target + "/" + file, 'r'));
     });
   }
 
@@ -128,11 +131,55 @@ function createRunDirs(options) {
     coalDirs.forEach(function(cd) {
       var targetCoalDir = studentOutDir + "/" + cd;
       fs.mkdirSync(targetCoalDir);
-      copyFiles(coalDir + "/" + cd, targetGoldDir);
+      copyFiles(coalDir + "/" + cd, targetCoalDir);
       var targetCoalTestFile = studentOutDir + "/" + cd + "/" + testFilename;
       fs.writeFileSync(targetCoalTestFile, transformedContents);
+      fs.fsyncSync(fs.openSync(targetCoalTestFile, 'r'));
     });
   });
 }
 
-module.exports = { createRunDirs: createRunDirs };
+function runTests(options) {
+  var outDir = options.outDir;
+  var runCommand = options.runCommand;
+  var testFilename = options.testFilename;
+  var child;
+
+  console.log('Starting in ' + process.cwd());
+  function handleSubmissions(sds) {
+    if(sds.length === 0) { return; }
+    else {
+      var studentDir = sds.pop();
+      function handleImpls(impls) {
+        if(impls.length === 0) { handleSubmissions(sds); }
+        else {
+          var runDir = impls.pop();
+          var changeDir = outDir + "/" + studentDir + "/" + runDir;
+          var stdoutFile = changeDir + "/" + testFilename + ".out";
+          var stderrFile = changeDir + "/" + testFilename + ".err";
+          console.log("Switching to " + changeDir);
+          child = exec("cd " + changeDir + " && " + runCommand, function (error, stdout, stderr) {
+            if (error !== null) {
+              console.log('While running for student ' + studentDir);
+              console.log('On ' + runDir);
+              console.log('Error while evaluating your command' + error);
+              console.log('');
+            }
+            fs.writeFileSync(stdoutFile, stdout);
+            fs.writeFileSync(stderrFile, stderr);
+            console.log('Finished ' + runDir + ' for ' + studentDir);
+            handleImpls(impls);
+          });
+        }
+      }
+      handleImpls(fs.readdirSync(outDir + "/" + studentDir));
+    }
+  }
+  handleSubmissions(fs.readdirSync(outDir));
+}
+
+module.exports = {
+  createRunDirs: createRunDirs,
+  runTests: runTests
+};
+
